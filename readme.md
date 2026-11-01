@@ -63,6 +63,23 @@ database_name = 'xyz-data'
 
 ## 运行
 
+### 桌面 GUI（PyQt6）
+
+``` Bash
+python src/gui.py
+```
+
+GUI 定位为抓取工具，复用现有 CLI 与 MongoDB 数据结构，提供：
+
+- 粘贴播客/节目链接自动识别目标
+- 逐字稿开关、评论范围（不抓/仅最新一期/所有节目）和期数限制
+- 后台任务队列、实时日志、取消任务和退出保护
+- 已抓节目、逐字稿和评论的数据校验
+- 单期 Markdown/JSON/SRT 与节目清单 CSV 导出
+- MongoDB 连接和 token 配置状态检查
+
+配置仍读取 `data/config.toml` 与 `data/token.json`。重复全量抓取会按原工具设计写入新的 task 记录；GUI 数据页按 eid 显示最新记录。
+
 ### 抓取节目信息及其评论
 
 ``` Bash
