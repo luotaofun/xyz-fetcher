@@ -22,6 +22,7 @@ class Fetcher:
         self.episodes_order: str = None
         self.episodes_max_count: int = None
         self.fetch_comments: bool = None
+        self.fetch_transcripts: bool = None
         self.comments_max_count_primary: int = None
         self.comments_max_count_thread: int = None
         self.cfg: ConfigFile = None
@@ -39,6 +40,7 @@ class Fetcher:
         self.episodes_order = args.episodes_order
         self.episodes_max_count = args.episodes_max_count
         self.fetch_comments = args.fetch_comments
+        self.fetch_transcripts = args.fetch_transcripts
         self.comments_max_count_primary = args.comments_max_count_primary
         self.comments_max_count_thread = args.comments_max_count_thread
 
@@ -106,6 +108,11 @@ class Fetcher:
         podcast_col.create_index([('__insert_time', pymongo.ASCENDING)], name='insert_time_index')
         episode_col.create_index([('eid', pymongo.ASCENDING)], name='eid_index')
         episode_col.create_index([('pid', pymongo.ASCENDING)], name='pid_index')
+
+        transcript_col: pymongo.collection.Collection = self.db['transcript']
+        transcript_col.create_index([('__task_id', pymongo.ASCENDING)], name='task_id_index')
+        transcript_col.create_index([('eid', pymongo.ASCENDING)], name='eid_index')
+        transcript_col.create_index([('pid', pymongo.ASCENDING)], name='pid_index')
 
 
     def load_token_file(self):
@@ -179,6 +186,8 @@ class Fetcher:
                 self.save_episode_data(episode)
                 print(f'fetched episode id={eid}')
                 print(f'                title={episode["title"]}')
+                if self.fetch_transcripts:
+                    self.fetch_episode_transcript(eid, pid, episode.get('transcriptMediaId'))
                 if self.fetch_comments:
                     self.fetch_episode_comments(eid)
                 # self.fetch_episode(eid)
@@ -195,8 +204,40 @@ class Fetcher:
         print(f'  title={episode_data["title"]}')
         self.save_episode_data(episode_data)
 
+        if self.fetch_transcripts:
+            self.fetch_episode_transcript(eid, episode_data.get('pid'), episode_data.get('transcriptMediaId'))
+
         if self.fetch_comments:
             self.fetch_episode_comments(eid)
+
+
+    def fetch_episode_transcript(self, eid, pid, media_id):
+        if not media_id:
+            print(f'  no transcript media id for episode id={eid}')
+            return
+        print(f'fetching transcript for episode id={eid}')
+        res = self.api_helper.get_episode_transcript(eid, media_id)
+        transcript_data = res.get('data', None)
+        if not transcript_data:
+            print('  no transcript available')
+            return
+
+        transcript_url = transcript_data.get('transcriptUrl')
+        if not transcript_url:
+            print('  no transcript url')
+            return
+
+        segments = self.api_helper.download_transcript(transcript_url)
+        self.save_transcript_data({
+            'eid': eid,
+            'pid': pid,
+            'key': transcript_data.get('key'),
+            'vendorDeclaration': transcript_data.get('vendorDeclaration'),
+            'transcriptUrl': transcript_url,
+            'segments': segments,
+            'segmentCount': len(segments),
+        })
+        print(f'  fetched transcript with {len(segments)} segments')
 
 
     def fetch_episode_comments(self, eid):
@@ -204,7 +245,7 @@ class Fetcher:
         comments = []
         for comment in self.fetch_items_paged(lambda key: self.api_helper.list_comment_primary(eid, load_more_key=key),
                                               self.comments_max_count_primary):
-            self.save_comment_data(comment)
+            self.save_comment_data(comment, eid)
             comments.append(comment)
 
         print(f'  fetched {len(comments)} primary comments')
@@ -217,7 +258,7 @@ class Fetcher:
             if comment.get('replyCount', 0) > 0:
                 for comment in self.fetch_items_paged(lambda key: self.api_helper.list_comment_thread(current_comment_id, load_more_key=key),
                                                       self.comments_max_count_thread):
-                    self.save_comment_data(comment)
+                    self.save_comment_data(comment, eid)
                     fetched_thread_comments += 1
         print(f'  fetched {fetched_thread_comments} thread comments')
 
@@ -235,6 +276,10 @@ class Fetcher:
 
 
     def save_podcast_data(self, podcast_data: dict):
+        # Subscription state fields belong to the token owner's account, not to the podcast content
+        for field in ('subscriptionStatus', 'subscriptionStar', 'subscriptionPush',
+                      'subscriptionPushPriority'):
+            podcast_data.pop(field, None)
         podcasters = podcast_data.pop('podcasters', [])
         for podcaster in podcasters:
             self.save_user_data(podcaster)
@@ -243,23 +288,24 @@ class Fetcher:
 
 
     def save_episode_data(self, episode_data: dict):
+        # Playback state fields belong to the token owner's account, not to the episode content
+        for field in ('isPlayed', 'isFinished', 'isFavorited', 'isPicked'):
+            episode_data.pop(field, None)
         podcast = episode_data.pop('podcast', None)
         # podcast repensent by 'pid' field
         # episode_data['podcast'] = {
         #     'pid': podcast['pid']
         # }
-        
-        # TODO: drop the following fields:
-        # isPlayed
-        # isFinished
-        # isFavorited
-        # isPicked
+
         # TODO: save podcast if fetching episode
         # TODO: trim sponsors
         self.insert_to_db('episode', episode_data)
 
 
-    def save_comment_data(self, comment_data: dict):
+    def save_comment_data(self, comment_data: dict, eid: str = None):
+        # API comment documents do not carry the episode id; inject it for storage
+        if eid is not None:
+            comment_data['eid'] = eid
         author = comment_data.pop('author', None)
         if author:
             self.save_user_data(author)
@@ -280,6 +326,10 @@ class Fetcher:
         self.insert_to_db('comment', comment_data)
 
 
+    def save_transcript_data(self, transcript_data: dict):
+        self.insert_to_db('transcript', transcript_data)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file', help='path to configuration file')
@@ -296,6 +346,8 @@ if __name__ == '__main__':
     # Comment settings
     parser.add_argument('--no-fetch-comments', action='store_false', dest='fetch_comments', default=True,
                         help="should fetch comments")
+    parser.add_argument('--no-fetch-transcripts', action='store_false', dest='fetch_transcripts', default=True,
+                        help="do not fetch episode transcripts")
     parser.add_argument('--comments-max-count-primary', type=int, default=0,
                         help="max primary comments to fetch")
     parser.add_argument('--comments-max-count-thread', type=int, default=0,

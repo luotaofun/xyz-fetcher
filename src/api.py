@@ -5,7 +5,10 @@ import requests
 from retry import retry
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# The transcript endpoints validate the Android app User-Agent strictly
+ANDROID_UA = 'Xiaoyuzhou/2.99.1(android 28)'
 
 class ApiHelper:
     def __init__(self,
@@ -113,6 +116,49 @@ class ApiHelper:
 
     def get_episode(self, eid):
         return self.api_request('GET', f'https://api.xiaoyuzhoufm.com/v1/episode/get?eid={eid}')
+
+
+    def android_headers(self):
+        now = datetime.now(timezone(timedelta(hours=8)))
+        local_time = now.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+        return {
+            'os': 'android',
+            'os-version': '28',
+            'manufacturer': 'Xiaomi',
+            'model': 'MI 6',
+            'resolution': '1080x1920',
+            'market': 'xiaomi',
+            'applicationid': 'app.podcast.cosmos',
+            'app-version': '2.99.1',
+            'app-buildno': '1362',
+            'webviewversion': '138.0.7204.179',
+            'User-Agent': ANDROID_UA,
+            'app-permissions': '100100',
+            'wificonnected': 'false',
+            'timezone': 'Asia/Shanghai',
+            'local-time': local_time,
+            'content-type': 'application/json;charset=utf-8',
+            'Accept-Encoding': 'gzip',
+        }
+
+
+    def get_episode_transcript(self, eid, media_id):
+        """
+        Get transcript metadata (signed CDN URL) of an episode.
+        Returns {'data': {...}} or {'data': None} when the episode has no transcript.
+        """
+        return self.api_request('POST', 'https://api.xiaoyuzhoufm.com/v1/episode-transcript/get',
+                                json={'eid': eid, 'mediaId': media_id},
+                                headers=self.android_headers())
+
+
+    @retry(requests.exceptions.ConnectionError, tries=6, delay=15)
+    def download_transcript(self, transcript_url):
+        # The transcript CDN only whitelists the official Android app User-Agent
+        r = self.session.get(transcript_url, headers={'User-Agent': ANDROID_UA}, timeout=30)
+        if r.status_code != 200:
+            raise Exception(f'Failed to download transcript: {r.status_code}')
+        return r.json()
 
 
     def list_comment_primary(self, eid, order='hot', load_more_key=None):

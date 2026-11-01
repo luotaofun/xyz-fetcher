@@ -9,6 +9,8 @@
 
 - 抓取指定节目信息
 
+- 抓取指定节目的逐字稿
+
 - 抓取指定节目的所有评论
 
 - 使用 MongoDB 存储抓取数据
@@ -71,6 +73,20 @@ python src/main.py --eid=<episode_id>
 
 ``` Bash
 python src/main.py --pid=<podcast_id>
+```
+
+默认同时抓取每个节目的评论和逐字稿；加 `--no-fetch-comments` 可只抓节目，加 `--no-fetch-transcripts` 可跳过逐字稿。
+使用 `--episodes-max-count=<n>` 限制抓取期数（0 为全部，注意按整页生效，每页最多 20 条）。
+
+
+``` Toml
+[mysql]
+host = '127.0.0.1'
+port = 3306
+
+user = '<MySQL Username>'
+password = '<MySQL Password>'
+database_name = ''
 ```
 
 ### 查看所有选项
