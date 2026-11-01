@@ -6,8 +6,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QCloseEvent, QDesktopServices
+from PyQt6.QtCore import QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QCloseEvent, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QSizePolicy,
     QStackedWidget,
     QStatusBar,
     QTabWidget,
@@ -105,6 +106,38 @@ def selectable_label(text: str) -> QLabel:
     return label
 
 
+def card_title(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("CardTitle")
+    return label
+
+
+def meta_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("Meta")
+    label.setWordWrap(True)
+    return label
+
+
+def status_pill(text: str, state: str = "neutral") -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("StatusPill")
+    label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    set_status_pill(label, text, state)
+    return label
+
+
+def set_status_pill(label: QLabel, text: str, state: str):
+    label.setText(text)
+    label.setProperty("state", state)
+    label.style().unpolish(label)
+    label.style().polish(label)
+
+
+def nav_icon(name: str) -> QIcon:
+    return QIcon(str(PROJECT_ROOT / "src" / "gui_app" / "assets" / f"{name}.svg"))
+
+
 class FetchPage(QWidget):
     def __init__(self, tasks: TaskManager):
         super().__init__()
@@ -165,23 +198,22 @@ class FetchPage(QWidget):
 
         active_row = QHBoxLayout()
         active_row.setContentsMargins(2, 0, 2, 0)
-        self.active_label = QLabel("队列空闲")
-        self.active_label.setProperty("muted", True)
+        self.active_pill = status_pill("队列空闲", "neutral")
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.setFixedWidth(180)
         self.progress.setVisible(False)
-        active_row.addWidget(self.active_label, 1)
+        active_row.addWidget(self.active_pill)
+        active_row.addStretch(1)
         active_row.addWidget(self.progress)
         root.addLayout(active_row)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         task_panel, task_layout = card_layout()
         task_header = QHBoxLayout()
-        task_title = QLabel("任务队列")
-        task_title.setObjectName("SectionTitle")
-        task_header.addWidget(task_title)
+        self.queue_title = card_title("任务队列")
+        task_header.addWidget(self.queue_title)
         task_header.addStretch(1)
         self.cancel_button = QPushButton("取消所选")
         self.cancel_button.setObjectName("DangerButton")
@@ -206,8 +238,7 @@ class FetchPage(QWidget):
         splitter.addWidget(task_panel)
 
         log_panel, log_layout = card_layout()
-        log_title = QLabel("实时日志")
-        log_title.setObjectName("SectionTitle")
+        log_title = card_title("实时日志")
         log_layout.addWidget(log_title)
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("LogView")
@@ -288,6 +319,7 @@ class FetchPage(QWidget):
             self.task_tree.setCurrentItem(selected_item)
         self.task_tree.blockSignals(False)
         self.task_stack.setCurrentIndex(1 if self.tasks.tasks else 0)
+        self.queue_title.setText(f"任务队列 · {len(self.tasks.tasks)}")
         self.cancel_button.setEnabled(
             bool(selected_task and selected_task.status in {"等待中", "运行中"})
         )
@@ -333,16 +365,17 @@ class FetchPage(QWidget):
 
     def update_active(self, task_id: str):
         if not task_id:
-            self.active_label.setText("队列空闲")
+            set_status_pill(self.active_pill, "队列空闲", "neutral")
             self.progress.setRange(0, 1)
             self.progress.setValue(0)
             self.progress.setVisible(False)
             return
+        set_status_pill(self.active_pill, "抓取运行中", "success")
         self.progress.setVisible(True)
         task = next((task for task in self.tasks.tasks if task.id == task_id), None)
         if task:
             stage = " · 最新一期评论" if task.stage == 2 else ""
-            self.active_label.setText(f"正在运行：{task.display_name}{stage}")
+            self.active_pill.setToolTip(f"{task.display_name}{stage}")
             self.progress.setRange(0, 0)
 
 
@@ -375,8 +408,7 @@ class DataPage(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         podcast_panel, podcast_layout = card_layout()
-        podcast_title = QLabel("播客")
-        podcast_title.setObjectName("SectionTitle")
+        podcast_title = card_title("播客")
         podcast_layout.addWidget(podcast_title)
         self.podcast_list = QListWidget()
         self.podcast_list.setSpacing(4)
@@ -391,8 +423,7 @@ class DataPage(QWidget):
 
         episode_panel, episode_layout = card_layout()
         episode_header = QHBoxLayout()
-        episode_title = QLabel("节目")
-        episode_title.setObjectName("SectionTitle")
+        episode_title = card_title("节目")
         episode_header.addWidget(episode_title)
         episode_header.addStretch(1)
         self.search_input = QLineEdit()
@@ -403,26 +434,33 @@ class DataPage(QWidget):
         episode_layout.addLayout(episode_header)
         self.episode_table = QTableWidget(0, 5)
         self.episode_table.setHorizontalHeaderLabels(
-            ["标题", "发布日期", "时长", "逐字稿", "已抓评论"]
+            ["标题", "日期", "时长", "逐字稿", "评论"]
         )
+        self.episode_table.horizontalHeaderItem(1).setToolTip("发布日期")
+        self.episode_table.horizontalHeaderItem(4).setToolTip("已抓评论数")
         self.episode_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.episode_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.episode_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.episode_table.setAlternatingRowColors(True)
         self.episode_table.verticalHeader().setVisible(False)
-        self.episode_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 5):
-            self.episode_table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.ResizeToContents
-            )
+        self.episode_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        header = self.episode_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.episode_table.setColumnWidth(3, 92)
+        self.episode_table.setColumnWidth(4, 92)
         self.episode_table.itemSelectionChanged.connect(self.episode_selected)
         episode_layout.addWidget(self.episode_table)
         splitter.addWidget(episode_panel)
 
         detail_panel, detail_layout = card_layout()
         detail_header = QHBoxLayout()
-        detail_title = QLabel("内容检查")
-        detail_title.setObjectName("SectionTitle")
+        detail_title = card_title("内容检查")
         detail_header.addWidget(detail_title)
         detail_header.addStretch(1)
         self.export_episode_button = QPushButton("导出当前期")
@@ -430,6 +468,14 @@ class DataPage(QWidget):
         self.export_episode_button.clicked.connect(self.export_current_episode)
         detail_header.addWidget(self.export_episode_button)
         detail_layout.addLayout(detail_header)
+        self.episode_detail_title = QLabel("选择一期节目查看内容")
+        self.episode_detail_title.setObjectName("DetailTitle")
+        self.episode_detail_title.setWordWrap(True)
+        self.episode_detail_meta = meta_label(
+            "选择节目后，这里会显示标题摘要、eid 与评论统计"
+        )
+        detail_layout.addWidget(self.episode_detail_title)
+        detail_layout.addWidget(self.episode_detail_meta)
         self.detail_tabs = QTabWidget()
         self.info_view = self._text_view()
         self.transcript_view = self._text_view()
@@ -469,7 +515,9 @@ class DataPage(QWidget):
             completeness = (
                 f"{podcast['transcripts']}/{podcast['episodes']} 逐字稿"
             )
-            item = QListWidgetItem(f"{podcast['title']}\n{podcast['episodes']} 期 · {completeness}")
+            item = QListWidgetItem(
+                f"{podcast['title']}\n{podcast['episodes']} 期 · {completeness}"
+            )
             item.setData(Qt.ItemDataRole.UserRole, podcast["pid"])
             item.setToolTip(podcast["pid"])
             self.podcast_list.addItem(item)
@@ -556,6 +604,8 @@ class DataPage(QWidget):
         self._detail_request += 1
         request_id = self._detail_request
         self.export_episode_button.setEnabled(False)
+        self.episode_detail_title.setText("正在读取节目…")
+        self.episode_detail_meta.setText(eid)
         self.info_view.setPlainText("正在读取…")
         self.transcript_view.clear()
         self.comments_view.clear()
@@ -572,9 +622,14 @@ class DataPage(QWidget):
         episode = bundle["episode"]
         transcript = bundle.get("transcript")
         comments = bundle.get("comments") or []
+        self.episode_detail_title.setText(episode.get("title") or episode["eid"])
+        self.episode_detail_meta.setText(
+            f"{episode['eid']} · 发布 {(episode.get('pubDate') or '-')[:10]} · "
+            f"时长 {format_duration(episode.get('duration'))} · "
+            f"评论 {len(comments)}/{episode.get('commentCount', 0)}"
+        )
         info = [
-            episode.get("title") or episode["eid"],
-            "",
+            "基本信息",
             f"eid：{episode['eid']}",
             f"pid：{episode.get('pid', '-')}",
             f"发布：{episode.get('pubDate', '-')}",
@@ -663,31 +718,41 @@ class SettingsPage(QWidget):
         root.addLayout(page_header("设置", "查看当前运行环境与凭据状态；配置修改后重启 GUI 生效"))
 
         environment_card, environment_layout = card_layout()
-        title = QLabel("运行环境")
-        title.setObjectName("SectionTitle")
-        environment_layout.addWidget(title)
+        environment_layout.addWidget(card_title("运行环境"))
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
         form.addRow("Python", selectable_label(sys.executable))
         self.database_label = selectable_label(repository.database_label)
-        form.addRow("MongoDB", self.database_label)
+        self.database_pill = status_pill("未测试", "neutral")
+        database_row = QWidget()
+        database_layout = QHBoxLayout(database_row)
+        database_layout.setContentsMargins(0, 0, 0, 0)
+        database_layout.setSpacing(10)
+        database_layout.addWidget(self.database_label, 1)
+        database_layout.addWidget(self.database_pill)
+        form.addRow("MongoDB", database_row)
         form.addRow("配置文件", selectable_label(str(DEFAULT_CONFIG)))
         form.addRow("抓取入口", selectable_label(str(PROJECT_ROOT / "src" / "main.py")))
         environment_layout.addLayout(form)
         root.addWidget(environment_card)
 
         token_card, token_layout = card_layout()
-        token_title = QLabel("凭据与数据")
-        token_title.setObjectName("SectionTitle")
-        token_layout.addWidget(token_title)
-        self.token_label = QLabel()
-        self.token_label.setWordWrap(True)
-        self.token_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        token_layout.addWidget(self.token_label)
+        token_layout.addWidget(card_title("凭据与数据"))
+        token_layout.addWidget(meta_label("Token 文件"))
+        self.token_path = selectable_label("-")
+        token_layout.addWidget(self.token_path)
+        token_status_row = QHBoxLayout()
+        token_status_row.setSpacing(10)
+        self.access_pill = status_pill("access_token 未读取", "neutral")
+        self.refresh_pill = status_pill("refresh_token 未读取", "neutral")
+        self.token_updated = meta_label("最近更新：-")
+        token_status_row.addWidget(self.access_pill)
+        token_status_row.addWidget(self.refresh_pill)
+        token_status_row.addStretch(1)
+        token_status_row.addWidget(self.token_updated)
+        token_layout.addLayout(token_status_row)
         button_row = QHBoxLayout()
         self.test_button = QPushButton("测试数据库连接")
         self.test_button.setObjectName("PrimaryButton")
@@ -722,30 +787,41 @@ class SettingsPage(QWidget):
     def load_token_status(self):
         try:
             status = self.repository.token_status()
-            self.token_label.setText(
-                f"Token 文件：{status['path']}\n"
-                f"access_token：{'已配置' if status['access_token'] else '缺失'} · "
-                f"refresh_token：{'已配置' if status['refresh_token'] else '缺失'} · "
-                f"最近更新：{status['modified']}"
+            self.token_path.setText(status["path"])
+            set_status_pill(
+                self.access_pill,
+                "access_token 已配置" if status["access_token"] else "access_token 缺失",
+                "success" if status["access_token"] else "error",
             )
+            set_status_pill(
+                self.refresh_pill,
+                "refresh_token 已配置" if status["refresh_token"] else "refresh_token 缺失",
+                "success" if status["refresh_token"] else "error",
+            )
+            self.token_updated.setText(f"最近更新：{status['modified']}")
         except Exception as exc:
-            self.token_label.setText(f"无法读取 token 状态：{exc}")
+            self.token_path.setText("无法读取 token 文件")
+            set_status_pill(self.access_pill, "token 读取失败", "error")
+            set_status_pill(self.refresh_pill, "token 读取失败", "error")
+            self.token_updated.setText(str(exc))
 
     def test_connection(self):
         self.test_button.setEnabled(False)
-        self.database_label.setText(f"{self.repository.database_label} · 正在测试…")
+        set_status_pill(self.database_pill, "正在测试", "warning")
         self._test_worker = run_async(
             self.repository.test_connection, self._connection_ok, self._connection_error
         )
 
     def _connection_ok(self, version: str):
         self.test_button.setEnabled(True)
-        self.database_label.setText(f"{self.repository.database_label} · MongoDB {version}")
+        set_status_pill(self.database_pill, f"正常 · MongoDB {version}", "success")
+        self.database_pill.setToolTip(f"MongoDB {version}")
         self.status_message.emit("数据库连接正常")
 
     def _connection_error(self, message: str):
         self.test_button.setEnabled(True)
-        self.database_label.setText(f"{self.repository.database_label} · 连接失败")
+        set_status_pill(self.database_pill, "连接失败", "error")
+        self.database_pill.setToolTip(message)
         self.status_message.emit(f"数据库连接失败：{message}")
 
 
@@ -777,7 +853,9 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("AppSubtitle")
         side.addWidget(brand)
         side.addWidget(subtitle)
-        side.addSpacing(22)
+        side.addSpacing(20)
+        side.addWidget(meta_label("工作区"))
+        side.addSpacing(6)
 
         self.stack = QStackedWidget()
         self.fetch_page = FetchPage(self.tasks)
@@ -788,31 +866,37 @@ class MainWindow(QMainWindow):
 
         nav_group = QButtonGroup(self)
         nav_group.setExclusive(True)
-        for index, text in enumerate(("抓取任务", "数据校验", "设置")):
+        nav_items = (
+            ("抓取任务", "tasks"),
+            ("数据校验", "data"),
+            ("设置", "settings"),
+        )
+        for index, (text, icon_name) in enumerate(nav_items):
             button = QPushButton(text)
             button.setObjectName("NavButton")
             button.setCheckable(True)
+            button.setIcon(nav_icon(icon_name))
+            button.setIconSize(QSize(17, 17))
             button.clicked.connect(lambda _=False, i=index: self.navigate(i))
             nav_group.addButton(button, index)
             side.addWidget(button)
             if index == 0:
                 button.setChecked(True)
         side.addStretch(1)
-        self.db_status = QLabel("MongoDB · 未测试")
-        self.db_status.setProperty("muted", True)
-        self.db_status.setWordWrap(True)
+        self.db_status = status_pill("数据库未测试", "neutral")
+        self.db_status.setToolTip(self.repository.database_label)
         side.addWidget(self.db_status)
         version = QLabel("PyQt6 Desktop · v0.2")
-        version.setProperty("muted", True)
+        version.setObjectName("Meta")
         side.addWidget(version)
         root.addWidget(sidebar)
         root.addWidget(self.stack, 1)
 
         status = QStatusBar()
         self.setStatusBar(status)
-        self.task_status = QLabel("任务队列空闲")
+        self.task_status = meta_label("任务队列空闲")
         status.addWidget(self.task_status, 1)
-        status.addPermanentWidget(QLabel(self.repository.database_label))
+        status.addPermanentWidget(meta_label(self.repository.database_label))
         self.tasks.active_changed.connect(self._active_status)
         self.tasks.task_finished.connect(self._task_finished)
         self.data_page.status_message.connect(self.statusBar().showMessage)
@@ -828,10 +912,11 @@ class MainWindow(QMainWindow):
             self.settings_page.load_token_status()
 
     def _db_ok(self, version: str):
-        self.db_status.setText(f"MongoDB {version}\n连接正常")
+        set_status_pill(self.db_status, "数据库连接正常", "success")
+        self.db_status.setToolTip(f"MongoDB {version} · {self.repository.database_label}")
 
     def _db_error(self, message: str):
-        self.db_status.setText("MongoDB\n连接失败")
+        set_status_pill(self.db_status, "数据库连接失败", "error")
         self.statusBar().showMessage(f"数据库连接失败：{message}", 10000)
 
     def _active_status(self, task_id: str):
